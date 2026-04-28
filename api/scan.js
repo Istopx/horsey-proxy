@@ -1,4 +1,6 @@
-export default async function handler(req, res) {
+const https = require('https');
+
+module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -6,58 +8,54 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
+  const apiKey = (process.env.ANTHROPIC_API_KEY || '').trim();
+  if (!apiKey) {
+    return res.status(500).json({ error: 'API key not configured on server' });
+  }
+
   try {
-    // Check API key first
-    const apiKey = (process.env.ANTHROPIC_API_KEY || '').trim();
-    if (!apiKey) {
-      return res.status(500).json({ error: 'API key not configured on server' });
-    }
+    const body = req.body || {};
+    const messages = body.messages || [];
 
-    // Parse body — handle both pre-parsed and raw string cases
-    let parsed;
-    if (req.body && typeof req.body === 'object') {
-      parsed = req.body;
-    } else if (req.body && typeof req.body === 'string') {
-      parsed = JSON.parse(req.body);
-    } else {
-      // Read raw stream as fallback
-      const raw = await new Promise((resolve, reject) => {
-        let data = '';
-        req.on('data', chunk => { data += chunk.toString(); });
-        req.on('end', () => resolve(data));
-        req.on('error', reject);
-      });
-      parsed = JSON.parse(raw);
-    }
-
-    // Build Anthropic request — model is hardcoded here on the server
-    const anthropicBody = {
+    const payload = JSON.stringify({
       model: 'claude-3-haiku-20240307',
       max_tokens: 4000,
-      messages: parsed.messages
-    };
-
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify(anthropicBody)
+      messages: messages
     });
 
-    const responseText = await response.text();
+    const result = await new Promise((resolve, reject) => {
+      const options = {
+        hostname: 'api.anthropic.com',
+        path: '/v1/messages',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01'
+        }
+      };
 
-    let data;
+      const apiReq = https.request(options, (apiRes) => {
+        let data = '';
+        apiRes.on('data', chunk => { data += chunk; });
+        apiRes.on('end', () => resolve({ status: apiRes.statusCode, body: data }));
+      });
+
+      apiReq.on('error', reject);
+      apiReq.write(payload);
+      apiReq.end();
+    });
+
+    let parsed;
     try {
-      data = JSON.parse(responseText);
+      parsed = JSON.parse(result.body);
     } catch (e) {
-      return res.status(500).json({ error: 'Non-JSON from Anthropic', raw: responseText.slice(0, 500) });
+      return res.status(500).json({ error: 'Non-JSON from Anthropic', raw: result.body.slice(0, 500) });
     }
 
-    return res.status(response.status).json(data);
+    return res.status(result.status).json(parsed);
   } catch (err) {
-    return res.status(500).json({ error: err.message, stack: err.stack });
+    return res.status(500).json({ error: err.message });
   }
-}
+};
