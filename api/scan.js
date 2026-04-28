@@ -9,14 +9,22 @@ module.exports = async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const apiKey = (process.env.ANTHROPIC_API_KEY || '').trim();
-  if (!apiKey) return res.status(500).json({ error: 'No API key' });
+  if (!apiKey) {
+    return res.status(500).json({ error: 'API key not configured on server' });
+  }
 
   try {
-    const messages = (req.body || {}).messages || [];
-    const payload = JSON.stringify({ model: 'claude-3-haiku-20240307', max_tokens: 4000, messages });
+    const body = req.body || {};
+    const messages = body.messages || [];
+
+    const payload = JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 4000,
+      messages: messages
+    });
 
     const result = await new Promise((resolve, reject) => {
-      const r = https.request({
+      const options = {
         hostname: 'api.anthropic.com',
         path: '/v1/messages',
         method: 'POST',
@@ -26,17 +34,27 @@ module.exports = async function handler(req, res) {
           'x-api-key': apiKey,
           'anthropic-version': '2023-06-01'
         }
-      }, (resp) => {
-        let d = '';
-        resp.on('data', c => d += c);
-        resp.on('end', () => resolve({ status: resp.statusCode, body: d }));
+      };
+
+      const apiReq = https.request(options, (apiRes) => {
+        let data = '';
+        apiRes.on('data', chunk => { data += chunk; });
+        apiRes.on('end', () => resolve({ status: apiRes.statusCode, body: data }));
       });
-      r.on('error', reject);
-      r.write(payload);
-      r.end();
+
+      apiReq.on('error', reject);
+      apiReq.write(payload);
+      apiReq.end();
     });
 
-    return res.status(result.status).json(JSON.parse(result.body));
+    let parsed;
+    try {
+      parsed = JSON.parse(result.body);
+    } catch (e) {
+      return res.status(500).json({ error: 'Non-JSON from Anthropic', raw: result.body.slice(0, 500) });
+    }
+
+    return res.status(result.status).json(parsed);
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
