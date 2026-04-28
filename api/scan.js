@@ -9,22 +9,23 @@ module.exports = async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const apiKey = (process.env.ANTHROPIC_API_KEY || '').trim();
-  if (!apiKey) {
-    return res.status(500).json({ error: 'API key not configured on server' });
-  }
+  if (!apiKey) return res.status(500).json({ error: 'No API key' });
 
   try {
-    const body = req.body || {};
-    const messages = body.messages || [];
+    const messages = (req.body || {}).messages || [];
 
     const payload = JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 8000,
+      model: 'claude-sonnet-4-6',
+      max_tokens: 16000,
+      thinking: {
+        type: 'enabled',
+        budget_tokens: 10000
+      },
       messages: messages
     });
 
     const result = await new Promise((resolve, reject) => {
-      const options = {
+      const r = https.request({
         hostname: 'api.anthropic.com',
         path: '/v1/messages',
         method: 'POST',
@@ -32,19 +33,17 @@ module.exports = async function handler(req, res) {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(payload),
           'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01'
+          'anthropic-version': '2023-06-01',
+          'anthropic-beta': 'interleaved-thinking-2025-05-14'
         }
-      };
-
-      const apiReq = https.request(options, (apiRes) => {
-        let data = '';
-        apiRes.on('data', chunk => { data += chunk; });
-        apiRes.on('end', () => resolve({ status: apiRes.statusCode, body: data }));
+      }, (apiRes) => {
+        let d = '';
+        apiRes.on('data', c => d += c);
+        apiRes.on('end', () => resolve({ status: apiRes.statusCode, body: d }));
       });
-
-      apiReq.on('error', reject);
-      apiReq.write(payload);
-      apiReq.end();
+      r.on('error', reject);
+      r.write(payload);
+      r.end();
     });
 
     let parsed;
